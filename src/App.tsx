@@ -20,7 +20,7 @@ type BetMarket = 'result' | 'goals' | 'corners' | 'btts' | 'half-result' | 'doub
 type BetSelection = Outcome | 'goals-over-1.5' | 'goals-under-1.5' | 'goals-over-2.5' | 'goals-under-2.5' | 'goals-over-3.5' | 'goals-under-3.5' | 'corners-over-8.5' | 'corners-under-8.5' | 'corners-over-9.5' | 'corners-under-9.5' | 'corners-over-10.5' | 'corners-under-10.5' | 'btts-yes' | 'btts-no' | 'half-home' | 'half-draw' | 'half-away' | 'double-1x' | 'double-12' | 'double-x2' | 'home-goals-over' | 'home-goals-under' | 'away-goals-over' | 'away-goals-under' | 'cards-over' | 'cards-under' | 'first-home' | 'first-away' | 'first-none' | 'score-0-0' | 'score-1-0' | 'score-0-1' | 'score-2-1' | 'score-1-2'
 type LiveMatch = { fixtureId: string; startedAt: number }
 type BetLeg = { id: string; fixtureId: string; fixtureName: string; market: BetMarket; marketLabel: string; selection: BetSelection; selectionLabel: string; odds: number }
-type Bet = { id: string; legs: BetLeg[]; stake: number; combinedOdds: number; status: 'open' | 'won' | 'lost'; payout: number; createdAt: number }
+type Bet = { id: string; slipNumber: string; legs: BetLeg[]; stake: number; combinedOdds: number; status: 'open' | 'won' | 'lost'; payout: number; createdAt: number }
 type BetOption = { market: BetMarket; marketLabel: string; selection: BetSelection; label: string; odds: number }
 type MatchEvent = { minute: number; side: 'home' | 'away'; kind: 'goal' | 'corner' | 'yellow' | 'red' | 'substitution'; player: Player; detail: string }
 type MatchStats = { homeGoals: number; awayGoals: number; halfHomeGoals: number; halfAwayGoals: number; homeCorners: number; awayCorners: number; homeYellows: number; awayYellows: number; homeReds: number; awayReds: number; firstGoalSide: 'home' | 'away' | null }
@@ -28,11 +28,18 @@ type MatchStats = { homeGoals: number; awayGoals: number; halfHomeGoals: number;
 function readBets(): Bet[] {
   const saved = readStorage<Record<string, unknown>[]>(BETS_KEY, () => [])
   return saved.flatMap((entry) => {
-    if (Array.isArray(entry.legs)) return [entry as unknown as Bet]
+    if (Array.isArray(entry.legs)) {
+      const id = typeof entry.id === 'string' ? entry.id : `legacy-${Date.now()}`
+      const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : 0
+      return [{ ...entry, id, createdAt, slipNumber: typeof entry.slipNumber === 'string' ? entry.slipNumber : makeSlipNumber(createdAt, id) } as unknown as Bet]
+    }
     if (typeof entry.fixtureId !== 'string' || typeof entry.selection !== 'string') return []
     const odds = typeof entry.odds === 'number' ? entry.odds : 1
+    const id = typeof entry.id === 'string' ? entry.id : `legacy-${Date.now()}`
+    const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : 0
     return [{
-      id: typeof entry.id === 'string' ? entry.id : `legacy-${Date.now()}`,
+      id,
+      slipNumber: makeSlipNumber(createdAt, id),
       legs: [{
         id: `legacy-leg-${entry.id ?? 'pick'}`,
         fixtureId: entry.fixtureId,
@@ -47,9 +54,20 @@ function readBets(): Bet[] {
       combinedOdds: odds,
       status: entry.status === 'won' || entry.status === 'lost' ? entry.status : 'open',
       payout: typeof entry.payout === 'number' ? entry.payout : 0,
-      createdAt: typeof entry.createdAt === 'number' ? entry.createdAt : 0,
+      createdAt,
     }]
   })
+}
+
+function makeSlipNumber(createdAt: number, id: string) {
+  const date = new Intl.DateTimeFormat('en-CA', {
+    timeZone: YANGON_TIME_ZONE,
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(createdAt)).replaceAll('-', '')
+  const code = id.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase().padStart(6, '0')
+  return `NOSH-${date}-${code}`
 }
 
 function readStorage<T>(key: string, fallback: () => T): T {
@@ -579,9 +597,11 @@ function App() {
     }
     const combinedOdds = pricedSlip.reduce((total, leg) => total * leg.odds, 1)
     const createdAt = clockNow
+    const id = `${createdAt}-${crypto.randomUUID()}`
     setBalance((current) => current - slipStake)
     setBets((current) => [{
-      id: `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+      id,
+      slipNumber: makeSlipNumber(createdAt, id),
       legs: pricedSlip,
       stake: slipStake,
       combinedOdds: Number(combinedOdds.toFixed(2)),
@@ -670,7 +690,27 @@ function App() {
           </section>}
 
         {page === 'clubs' && <section className="page-content subpage"><div className="subpage-heading clubs-heading"><div><small>20 CLUBS. ONE LEAGUE.</small><h1>Clubs <em>& players</em></h1><p>Choose any row to open the club profile and head-to-head record.</p></div><label className="search-box"><Search size={15} /><input placeholder="Search clubs or cities" value={search} onChange={(event) => setSearch(event.target.value)} /><span>/</span></label></div><section className="panel club-table-panel"><PanelHeading kicker={`${standings.filter(({ club }) => `${club.name} ${club.city}`.toLowerCase().includes(search.toLowerCase())).length} CLUBS`} title="League standings" /><StandingsTable rows={standings.filter(({ club }) => `${club.name} ${club.city}`.toLowerCase().includes(search.toLowerCase()))} clubMap={clubMap} onSelect={setSelectedClubId} /></section></section>}
-        {page === 'bets' && <section className="page-content subpage bets-page"><div className="subpage-heading"><div><small>YOUR PROFILE</small><h1>Wallet <em>& bet history</em></h1><p>Demo credits only. No deposits, withdrawals, or real-money betting.</p></div><span className="demo-chip">VIRTUAL MK</span></div><div className="wallet-overview"><span><Wallet size={19} /><small>AVAILABLE BALANCE</small><strong>MK {balance.toLocaleString()}</strong></span><span><ReceiptText size={18} /><small>TOTAL PICKS</small><strong>{bets.length}</strong></span><span><Activity size={18} /><small>OPEN PICKS</small><strong>{bets.filter((bet) => bet.status === 'open').length}</strong></span></div><section className="panel bet-history-panel"><PanelHeading kicker="YOUR MATCH PICKS" title="Bet history" />{bets.length === 0 ? <div className="empty-bets"><ReceiptText size={25} /><b>No picks yet</b><span>Choose an outcome from the daily match to add a demo pick.</span><button className="dark-button" onClick={() => goTo('overview')}>Go to today's match <ArrowRight size={14} /></button></div> : <div className="bet-history-list">{bets.map((bet) => { const firstLeg = bet.legs[0]; const fixture = firstLeg ? fixtures.find((item) => item.id === firstLeg.fixtureId) : undefined; const home = fixture ? clubMap.get(fixture.home) : undefined; const away = fixture ? clubMap.get(fixture.away) : undefined; const selections = bet.legs.map((leg) => `${leg.fixtureName}: ${leg.selectionLabel} @ ${leg.odds.toFixed(2)}`).join(' · '); return <article className="bet-history-row" key={bet.id}><div className="bet-market-info"><span className={`bet-status bet-${bet.status}`}>{bet.status}</span><b>{bet.legs.length > 1 ? `${bet.legs.length}-pick multi` : firstLeg?.marketLabel ?? 'Match pick'}</b><small>{selections}</small></div><div className="bet-event-info"><b>{home?.name ?? firstLeg?.fixtureName ?? 'NOSH League'}{bet.legs.length === 1 ? ` vs ${away?.name ?? 'Match'}` : ''}</b><small>{fixture ? formatDate(fixture.date) : 'Previous season'}</small></div><div className="bet-stake-info"><small>STAKE</small><b>MK {bet.stake.toLocaleString()}</b></div><div className="bet-return-info"><small>{bet.status === 'open' ? 'POSSIBLE RETURN' : 'PAYOUT'}</small><b>{bet.status === 'lost' ? 'MK 0' : `MK ${(bet.status === 'won' ? bet.payout : Math.round(bet.stake * bet.combinedOdds)).toLocaleString()}`}</b></div></article> })}</div>}</section></section>}
+        {page === 'bets' && <section className="page-content subpage bets-page">
+          <div className="subpage-heading"><div><small>YOUR PROFILE</small><h1>Wallet <em>& bet history</em></h1><p>Demo credits only. No deposits, withdrawals, or real-money betting.</p></div><span className="demo-chip">VIRTUAL MK</span></div>
+          <div className="wallet-overview"><span><Wallet size={19} /><small>AVAILABLE BALANCE</small><strong>MK {balance.toLocaleString()}</strong></span><span><ReceiptText size={18} /><small>TOTAL PICKS</small><strong>{bets.length}</strong></span><span><Activity size={18} /><small>OPEN PICKS</small><strong>{bets.filter((bet) => bet.status === 'open').length}</strong></span></div>
+          <section className="panel bet-history-panel"><PanelHeading kicker="YOUR MATCH PICKS" title="Bet history" />
+            {bets.length === 0 ? <div className="empty-bets"><ReceiptText size={25} /><b>No picks yet</b><span>Choose an outcome from a match market to add a demo pick.</span><button className="dark-button" onClick={() => goTo('overview')}>Go to today's match <ArrowRight size={14} /></button></div> :
+              <div className="bet-history-list">{bets.map((bet) => <article className="bet-ticket" key={bet.id}>
+                <header className="bet-ticket-summary">
+                  <span className={`bet-status bet-${bet.status}`}>{bet.status}</span><b>{bet.slipNumber}</b><span className="bet-ticket-type">{bet.legs.length > 1 ? `${bet.legs.length}-pick multi` : 'Single pick'}</span><span><small>STAKE</small><strong>MK {bet.stake.toLocaleString()}</strong></span><span><small>{bet.status === 'open' ? 'POSSIBLE RETURN' : 'PAYOUT'}</small><strong>{bet.status === 'lost' ? 'MK 0' : `MK ${(bet.status === 'won' ? bet.payout : Math.round(bet.stake * bet.combinedOdds)).toLocaleString()}`}</strong></span>
+                </header>
+                <div className="bet-ticket-legs">{bet.legs.map((leg) => {
+                  const fixture = fixtures.find((item) => item.id === leg.fixtureId)
+                  const home = fixture ? clubMap.get(fixture.home) : undefined
+                  const away = fixture ? clubMap.get(fixture.away) : undefined
+                  const teams = home && away ? `${home.name} vs ${away.name}` : 'Match unavailable'
+                  return <button className="bet-ticket-leg" key={leg.id} disabled={!fixture} onClick={() => fixture && setSelectedFixtureId(fixture.id)}>
+                    <span><b>{teams}</b><small>{fixture ? `${formatDate(fixture.date)} · ` : ''}{leg.marketLabel}: {leg.selectionLabel}</small></span><span className="bet-leg-odds"><small>ODDS</small><b>{leg.odds.toFixed(2)}</b></span><span className="bet-leg-open">{fixture ? 'Match details' : 'Unavailable'} <ArrowRight size={12} /></span>
+                  </button>
+                })}</div>
+              </article>)}</div>}
+          </section>
+        </section>}
       </main>
 
       {slipOpen && <div className="slip-backdrop" onClick={() => setSlipOpen(false)}><section className="slip-dialog" role="dialog" aria-modal="true" aria-labelledby="slip-title" onClick={(event) => event.stopPropagation()}><header className="slip-dialog-head"><span><small>VIRTUAL BET SLIP</small><b id="slip-title">Your selections <i>{pricedSlip.length}</i></b></span><button className="icon-button" aria-label="Close bet slip" onClick={() => setSlipOpen(false)}><X size={18} /></button></header>{pricedSlip.length === 0 ? <div className="slip-empty"><ReceiptText size={25} /><b>Your slip is empty</b><span>Choose an outcome from a match market to add a selection.</span></div> : <><div className="slip-selections">{pricedSlip.map((leg) => <article className="slip-selection" key={leg.id}><span><small>{leg.fixtureName} · {leg.marketLabel}</small><b>{leg.selectionLabel}</b></span><strong>{leg.odds.toFixed(2)}</strong><button aria-label={`Remove ${leg.selectionLabel}`} onClick={() => removeSlipPick(leg.id)}><X size={15} /></button></article>)}</div><div className="slip-summary"><span>Combined odds <b>{pricedSlip.reduce((total, leg) => total * leg.odds, 1).toFixed(2)}</b></span><label>Stake · MK<input type="number" min={MINIMUM_BET} max={balance} step="100" value={slipStake} onChange={(event) => setSlipStake(Number(event.target.value))} /></label><small>Possible return · MK {Math.round(slipStake * pricedSlip.reduce((total, leg) => total * leg.odds, 1)).toLocaleString()} · Balance MK {balance.toLocaleString()}</small><button className="place-slip-button" onClick={() => void placeBetSlip()}>Place virtual pick{pricedSlip.length > 1 ? ' multi' : ''}</button></div></>}</section></div>}
@@ -760,6 +800,7 @@ function DailyMatch({ fixture, clubMap, live, blocked, elapsed, minute, phase, e
   onOpenBets: () => void
 }) {
   const [selectedMarket, setSelectedMarket] = useState<BetMarket>('result')
+  const [matchBetHistoryOpen, setMatchBetHistoryOpen] = useState(false)
   const home = fixture ? clubMap.get(fixture.home) : undefined
   const away = fixture ? clubMap.get(fixture.away) : undefined
   if (!fixture || !home || !away) return <section className="daily-panel daily-finished"><Trophy size={20} /><div><small>DAILY MATCH</small><h2>Season complete</h2><p>Start a new season to play the next daily match.</p></div></section>
@@ -773,6 +814,7 @@ function DailyMatch({ fixture, clubMap, live, blocked, elapsed, minute, phase, e
   const visibleEvents = [...events].reverse()
   const fullTime = fixture.homeGoals !== null && fixture.awayGoals !== null
   const minuteLabel = minute > 90 ? `90+${minute - 90}'` : `${minute}'`
+  const matchBetRecords = bets.flatMap((bet) => bet.legs.filter((leg) => leg.fixtureId === fixture.id).map((leg) => ({ bet, leg })))
   const kickoffAt = fixture.kickoffAt ?? kickoffInYangon(fixture.date)
   const kickoffTime = formatYangonTime(kickoffAt)
   const kickoffWait = Math.max(0, Math.ceil((kickoffAt - now) / 1000))
@@ -807,7 +849,26 @@ function DailyMatch({ fixture, clubMap, live, blocked, elapsed, minute, phase, e
         </section>
       </section>
     </div>
-    <aside className="odds-panel"><header><span><small>{live ? 'LIVE MARKETS · UPDATED EACH SECOND' : 'PRE-MATCH MARKETS · LIVE PRICING'}</small><b>{marketLabels[selectedMarket]}</b></span><span className="demo-chip">{live ? 'IN PLAY' : 'VIRTUAL MK'}</span></header><div className="market-tabs">{([{ id: 'result', label: '1X2' }, { id: 'double-chance', label: 'Double' }, { id: 'half-result', label: 'Half' }, { id: 'goals', label: 'Goals' }, { id: 'team-goals', label: 'Team' }, { id: 'corners', label: 'Corners' }, { id: 'cards', label: 'Cards' }, { id: 'btts', label: 'BTTS' }, { id: 'first-goal', label: 'First goal' }, { id: 'correct-score', label: 'Exact' }] as { id: BetMarket; label: string }[]).map((tab) => <button key={tab.id} className={selectedMarket === tab.id ? 'active' : ''} onClick={() => setSelectedMarket(tab.id)}>{tab.label}</button>)}</div><div className="odds-options">{options.map((option) => { const selected = slip.some((leg) => leg.fixtureId === fixture.id && leg.selection === option.selection); return <button key={option.selection} className={selected ? 'odds-selected' : ''} disabled={fixture.homeGoals !== null || balance < MINIMUM_BET} onClick={() => onPick(option)} title={`${option.label} @ ${option.odds.toFixed(2)}${selected ? ' · click to remove' : ' · add to multi slip'}`}><span>{option.market === 'result' ? option.selection === 'home' ? '1' : option.selection === 'draw' ? 'X' : '2' : option.label.startsWith('Over') ? 'O' : option.label.startsWith('Under') ? 'U' : option.label === 'Yes' ? 'Y' : option.label === 'No' ? 'N' : option.label}</span><small>{option.label}</small><b>{option.odds.toFixed(2)}</b></button> })}</div><p className="demo-note">MK {balance.toLocaleString()} available · Min MK {MINIMUM_BET} · Virtual picks only{live ? ' · In-play picks accepted' : ''}.</p><button className="view-bets-link" onClick={onOpenBets}>Bet history ({bets.length}) <ArrowRight size={13} /></button>{bets.slice(0, 2).map((bet) => <p className={`prediction-receipt receipt-${bet.status}`} key={bet.id}><b>{bet.status.toUpperCase()}</b><span>{bet.legs.length} leg{bet.legs.length === 1 ? '' : 's'} · MK {bet.stake.toLocaleString()}</span></p>)}</aside>
+    <aside className="odds-panel">
+      <header><span><small>{live ? 'LIVE MARKETS · UPDATED EACH SECOND' : 'PRE-MATCH MARKETS · LIVE PRICING'}</small><b>{marketLabels[selectedMarket]}</b></span><span className="demo-chip">{live ? 'IN PLAY' : 'VIRTUAL MK'}</span></header>
+      <div className="market-tabs">{([{ id: 'result', label: '1X2' }, { id: 'double-chance', label: 'Double' }, { id: 'half-result', label: 'Half' }, { id: 'goals', label: 'Goals' }, { id: 'team-goals', label: 'Team' }, { id: 'corners', label: 'Corners' }, { id: 'cards', label: 'Cards' }, { id: 'btts', label: 'BTTS' }, { id: 'first-goal', label: 'First goal' }, { id: 'correct-score', label: 'Exact' }] as { id: BetMarket; label: string }[]).map((tab) => <button key={tab.id} className={selectedMarket === tab.id ? 'active' : ''} onClick={() => setSelectedMarket(tab.id)}>{tab.label}</button>)}</div>
+      <div className="odds-options">{options.map((option) => { const selected = slip.some((leg) => leg.fixtureId === fixture.id && leg.selection === option.selection); return <button key={option.selection} className={selected ? 'odds-selected' : ''} disabled={fixture.homeGoals !== null || balance < MINIMUM_BET} onClick={() => onPick(option)} title={`${option.label} @ ${option.odds.toFixed(2)}${selected ? ' · click to remove' : ' · add to multi slip'}`}><span>{option.market === 'result' ? option.selection === 'home' ? '1' : option.selection === 'draw' ? 'X' : '2' : option.label.startsWith('Over') ? 'O' : option.label.startsWith('Under') ? 'U' : option.label === 'Yes' ? 'Y' : option.label === 'No' ? 'N' : option.label}</span><small>{option.label}</small><b>{option.odds.toFixed(2)}</b></button> })}</div>
+      <p className="demo-note">MK {balance.toLocaleString()} available · Min MK {MINIMUM_BET} · Virtual picks only{live ? ' · In-play picks accepted' : ''}.</p>
+      <button className="view-bets-link" aria-expanded={matchBetHistoryOpen} onClick={() => setMatchBetHistoryOpen((open) => !open)}><ReceiptText size={13} /> Bet history ({matchBetRecords.length}) <ChevronDown className={matchBetHistoryOpen ? 'history-chevron history-chevron-open' : 'history-chevron'} size={13} /></button>
+      {matchBetHistoryOpen && <div className="market-bet-history">
+        {matchBetRecords.length ? matchBetRecords.map(({ bet, leg }) => {
+          const recorded = fullTime ? recordedStats(fixture, [...clubMap.values()]) : null
+          const legStatus = live ? 'live' : recorded ? betWins(leg.selection, recorded) ? 'won' : 'lost' : 'pending'
+          const returnLabel = bet.status === 'lost' ? 'MK 0' : `MK ${(bet.status === 'won' ? bet.payout : Math.round(bet.stake * bet.combinedOdds)).toLocaleString()}`
+          return <article className="market-bet-record" key={`${bet.id}-${leg.id}`}>
+            <header><b>{bet.slipNumber}</b><span className={`bet-status bet-${bet.status}`}>{bet.status.toUpperCase()}</span></header>
+            <div className="market-bet-choice"><span><b>{leg.selectionLabel}</b><small>{leg.marketLabel}{bet.legs.length > 1 ? ` · ${bet.legs.length}-pick multi` : ''}</small></span><span className="market-bet-odds"><small>ODDS</small><b>{leg.odds.toFixed(2)}</b></span></div>
+            <footer><span>STAKE <b>MK {bet.stake.toLocaleString()}</b></span><span>{bet.status === 'open' ? 'POSSIBLE RETURN' : 'PAYOUT'} <b>{returnLabel}</b></span><i className={`leg-${legStatus}`}>{legStatus === 'live' ? `IN PLAY · ${minuteLabel}` : legStatus === 'pending' ? 'UPCOMING' : legStatus.toUpperCase()}</i></footer>
+          </article>
+        }) : <p className="market-bet-empty">No bets have been placed on this match yet.</p>}
+        <button className="view-bets-link market-all-bets" onClick={onOpenBets}>Open full bet history <ArrowRight size={12} /></button>
+      </div>}
+    </aside>
   </section>
 }
 
